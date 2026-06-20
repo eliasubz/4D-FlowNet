@@ -8,13 +8,16 @@ import torch
 
 from src.dataset import SyntheticFlowDataset, upsample_lr
 from src.synthetic_flows import make_grid
+from src.visualize import make_interactive_3d_flow_figure
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preview one random synthetic 4D flow datapoint.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sample", type=int, default=0)
+    parser.add_argument("--hr-size", type=int, default=64)
     parser.add_argument("--output", type=Path, default=Path("outputs/random_datapoint.png"))
+    parser.add_argument("--html-output", type=Path, default=Path("outputs/random_datapoint_3d.html"))
     return parser.parse_args()
 
 
@@ -26,7 +29,7 @@ def main() -> None:
     args = parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
-    dataset = SyntheticFlowDataset(samples=args.sample + 1, seed=args.seed)
+    dataset = SyntheticFlowDataset(samples=args.sample + 1, hr_size=args.hr_size, seed=args.seed)
     lr_input, hr = dataset[args.sample]
     lr_velocity = lr_input[:3].unsqueeze(0)
     interp = upsample_lr(lr_velocity, hr.shape[-1]).squeeze(0)
@@ -104,6 +107,10 @@ def main() -> None:
     fig.suptitle(f"Random synthetic 4DFlowNet-mini datapoint | seed={args.seed}, sample={args.sample}")
     fig.savefig(args.output, dpi=180)
     print(args.output.resolve())
+
+    interactive = make_interactive_3d_flow_figure(hr, vector_step=max(2, args.hr_size // 16))
+    interactive.write_html(args.html_output)
+    print(args.html_output.resolve())
 
 
 if __name__ == "__main__":
