@@ -1,0 +1,8 @@
+=== Final Validation Performance Matrix ===
+| Upsampling Method                           |   Val MAE |   EPE (Endpoint Err) | Peak Velocity Err%   | Net Flow Err%   |   Divergence L1 |
+|:--------------------------------------------|----------:|---------------------:|:---------------------|:----------------|----------------:|
+| Trilinear (Math Baseline)                   |   0.22642 |              0.44315 | 29.67%               | 51.57%          |         0.20686 |
+| Tricubic (Math Baseline)                    |   0.32037 |              0.62758 | 68.28%               | 51.23%          |         0.33353 |
+| Sinc (Math Baseline)                        |   0.38087 |              0.75184 | 109.16%              | 53.88%          |         0.43861 |
+| Trilinear Model (Paper Architecture)        |   0.00917 |              0.01828 | 13.19%               | 9.15%           |         0.00709 |
+| Sub-Pixel Model (Our Upgraded Architecture) |   0.00583 |              0.01158 | 7.16%                | 4.89%           |         0.00736 |

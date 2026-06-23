@@ -53,15 +53,17 @@ We successfully implemented 3D Sub-Pixel Convolution (`PixelShuffle3d`) by intro
 
 When evaluated on the identical physics-based K-Space validation dataset, we can observe the difference between direct mathematical interpolation and learned deep super-resolution:
 
-| Upsampling Method | Val MAE | Peak Velocity Err% | Net Flow Err% |
-| :--- | :--- | :--- | :--- |
-| **Trilinear (Math Baseline)** | ~0.226 | ~30.1% | ~50.1% |
-| **Tricubic (Math Baseline)** | ~0.198 | ~28.5% | ~46.2% |
-| **Sinc (Math Baseline)** | ~0.224 | ~29.8% | ~49.8% |
-| **Trilinear Model (Paper)** | ~0.006 | ~7.4% | ~6.6% |
-| **Sub-Pixel Model (Ours)** | **~0.005** | **~7.0%** | **~5.9%** |
+| Upsampling Method | Val MAE | EPE (Endpoint Err) | Peak Velocity Err% | Net Flow Err% | Divergence L1 |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Trilinear (Math Baseline)** | 0.22642 | 0.44315 | 29.67% | 51.57% | 0.20686 |
+| **Tricubic (Math Baseline)** | 0.32037 | 0.62758 | 68.28% | 51.23% | 0.33353 |
+| **Sinc (Math Baseline)** | 0.38087 | 0.75184 | 109.16% | 53.88% | 0.43861 |
+| **Trilinear Model (Paper)** | 0.00917 | 0.01828 | 13.19% | 9.15% | **0.00709** |
+| **Sub-Pixel Model (Ours)** | **0.00583** | **0.01158** | **7.16%** | **4.89%** | 0.00736 |
 
-*Note: Mathematical baselines struggle severely because they cannot unwrap phase aliasing or denoise Rayleigh magnitude distributions, whereas the deep networks excel. Our sub-pixel model reduces the remaining error by ~15% over the paper's trilinear architecture.*
+![Ablation Study Convergence Plot](./assets/lets_goooo.png)
+
+*Note: Mathematical baselines struggle severely because they cannot unwrap phase aliasing or denoise Rayleigh magnitude distributions, whereas the deep networks excel. Our sub-pixel model reduces the remaining MAE and Endpoint Error by **~36%** over the paper's trilinear architecture while maintaining excellent physical flow properties.*
 
 #### Correct Visualization via Clinical Masking
 In real MRI post-processing, background noise (air and stationary tissue) is masked using a magnitude threshold. Without masking, the background contains random velocity vectors, which makes it look like blood is flowing outside the vessel walls. 

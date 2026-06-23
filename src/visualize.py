@@ -25,9 +25,13 @@ def make_interactive_3d_flow_figure(
 
     velocity = velocity.detach().cpu()
     if ref_velocity is not None:
+        ref_val = ref_velocity.detach().cpu()
+        wall_spd = speed(ref_val)
         # Create a binary fluid domain mask from the reference speed
-        mask = (torch.linalg.vector_norm(ref_velocity.detach().cpu(), dim=0) > 1e-4)
+        mask = (wall_spd > 1e-4)
         velocity = velocity * mask
+    else:
+        wall_spd = speed(velocity)
         
     spd = speed(velocity)
     d, h, w = spd.shape
@@ -55,9 +59,9 @@ def make_interactive_3d_flow_figure(
             x=xx.flatten().numpy(),
             y=yy.flatten().numpy(),
             z=zz.flatten().numpy(),
-            value=spd.flatten().numpy(),
+            value=wall_spd.flatten().numpy(),
             isomin=wall_threshold,
-            isomax=float(spd.max()),
+            isomax=float(wall_spd.max()),
             surface_count=1,
             opacity=0.16,
             colorscale="Greys",
