@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -28,6 +29,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-weight", type=float, default=1e-3)
     parser.add_argument("--divergence-weight", type=float, default=0.0)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
+
+    # Preprocessing mode.
+    parser.add_argument(
+        "--use-kspace-noise", action="store_true", default=False,
+        help="Use paper-faithful k-space MRI simulation instead of spatial Gaussian noise.",
+    )
+    parser.add_argument("--snr-range", type=float, nargs=2, default=[14.0, 17.0], metavar=("MIN", "MAX"))
+    parser.add_argument("--venc-range", type=float, nargs=2, default=[1.1, 3.0], metavar=("MIN", "MAX"))
+
+    # Model upsampling mode.
+    parser.add_argument(
+        "--upsample-mode", choices=["subpixel", "trilinear"], default="subpixel",
+        help="Upsampling strategy: 'subpixel' (learned, paper-faithful) or 'trilinear' (fixed).",
+    )
+
+    # Training extras.
+    parser.add_argument("--max-grad-norm", type=float, default=1.0, help="Gradient clipping max norm.")
     return parser.parse_args()
 
 
@@ -74,15 +92,34 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    train_data = SyntheticFlowDataset(args.train_samples, noise_std=args.noise_std, seed=10)
-    val_data = SyntheticFlowDataset(args.val_samples, noise_std=args.noise_std, seed=10000)
+    dataset_kwargs: dict = dict(noise_std=args.noise_std)
+    if args.use_kspace_noise:
+        dataset_kwargs.update(
+            use_kspace_noise=True,
+            snr_range=tuple(args.snr_range),
+            venc_range=tuple(args.venc_range),
+        )
+
+    train_data = SyntheticFlowDataset(args.train_samples, seed=10, **dataset_kwargs)
+    val_data = SyntheticFlowDataset(args.val_samples, seed=10000, **dataset_kwargs)
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    model = FourDFlowNet(width=args.width, lr_blocks=args.lr_blocks, hr_blocks=args.hr_blocks).to(device)
+    model = FourDFlowNet(
+        width=args.width,
+        lr_blocks=args.lr_blocks,
+        hr_blocks=args.hr_blocks,
+        upsample_mode=args.upsample_mode,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
-    print(f"device={device} params={sum(p.numel() for p in model.parameters()):,}")
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
+
+    noise_mode = "kspace" if args.use_kspace_noise else "spatial"
+    print(
+        f"device={device} params={sum(p.numel() for p in model.parameters()):,} "
+        f"noise={noise_mode} upsample={args.upsample_mode}"
+    )
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -93,20 +130,24 @@ def main() -> None:
             hr = hr.to(device)
             optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
+            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 pred = model(lr)
                 loss = four_d_flow_loss(pred, hr, gradient_weight=args.gradient_weight)
                 if args.divergence_weight > 0:
                     loss = loss + args.divergence_weight * divergence_l1(pred)
 
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_grad_norm)
             scaler.step(optimizer)
             scaler.update()
             running += loss.item()
             progress.set_postfix(loss=f"{loss.item():.4f}")
 
+        scheduler.step()
+
         metrics = evaluate(model, val_loader, device)
-        print(f"epoch={epoch} train_loss={running / len(train_loader):.5f}")
+        print(f"epoch={epoch} train_loss={running / len(train_loader):.5f} lr={scheduler.get_last_lr()[0]:.2e}")
         print(
             "  model:  "
             f"mae={metrics['model_mae']:.5f} epe={metrics['model_epe']:.5f} "

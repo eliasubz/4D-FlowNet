@@ -31,6 +31,28 @@ class ResidualBlock3D(nn.Module):
         return self.activation(x + self.net(x))
 
 
+class PixelShuffle3d(nn.Module):
+    """Rearrange channels into spatial dimensions for learned 3D upsampling.
+
+    Transforms a tensor from ``(B, C·r³, D, H, W)`` to ``(B, C, D·r, H·r, W·r)``
+    where *r* is the upscale factor.  This is the 3D extension of the sub-pixel
+    convolution approach from Shi et al. (2016) used in the original 4DFlowNet
+    paper for learned upsampling.
+    """
+
+    def __init__(self, upscale_factor: int) -> None:
+        super().__init__()
+        self.r = upscale_factor
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, d, h, w = x.shape
+        r = self.r
+        oc = c // (r ** 3)
+        x = x.view(b, oc, r, r, r, d, h, w)
+        x = x.permute(0, 1, 5, 2, 6, 3, 7, 4).contiguous()
+        return x.view(b, oc, d * r, h * r, w * r)
+
+
 class FourDFlowNet(nn.Module):
     """4DFlowNet 3D residual network.
 
@@ -46,8 +68,11 @@ class FourDFlowNet(nn.Module):
         width: int = 32,
         lr_blocks: int = 8,
         hr_blocks: int = 4,
+        upsample_mode: str = "subpixel",
     ) -> None:
         super().__init__()
+        self.upsample_mode = upsample_mode
+
         self.velocity_head = nn.Sequential(
             SymmetricConv3d(velocity_channels, width, kernel_size=3),
             nn.ReLU(inplace=True),
@@ -61,6 +86,18 @@ class FourDFlowNet(nn.Module):
             nn.ReLU(inplace=True),
         )
         self.lr_body = nn.Sequential(*[ResidualBlock3D(width) for _ in range(lr_blocks)])
+
+        if upsample_mode == "subpixel":
+            # Learned upsampling: conv to expand channels, then rearrange to spatial.
+            # width -> width * 2^3 channels, then PixelShuffle3d(2) -> width channels at 2x resolution.
+            self.upsample = nn.Sequential(
+                SymmetricConv3d(width, width * 8, kernel_size=3),
+                PixelShuffle3d(upscale_factor=2),
+                nn.ReLU(inplace=True),
+            )
+        else:
+            self.upsample = None
+
         self.hr_body = nn.Sequential(*[ResidualBlock3D(width) for _ in range(hr_blocks)])
         self.hr_refine = nn.Sequential(
             SymmetricConv3d(width, width, kernel_size=3),
@@ -78,7 +115,12 @@ class FourDFlowNet(nn.Module):
         anatomy_features = self.anatomy_head(magnitude)
         features = self.lr_fusion(torch.cat([velocity_features, anatomy_features], dim=1))
         features = self.lr_body(features)
-        features = F.interpolate(features, scale_factor=2, mode="trilinear", align_corners=True)
+
+        if self.upsample is not None:
+            features = self.upsample(features)
+        else:
+            features = F.interpolate(features, scale_factor=2, mode="trilinear", align_corners=True)
+
         features = self.hr_body(features)
         features = self.hr_refine(features)
         return torch.cat([self.vx_head(features), self.vy_head(features), self.vz_head(features)], dim=1)

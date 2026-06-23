@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
+from .mri_simulation import simulate_mri_acquisition
 from .synthetic_flows import random_flow_field
 
 
@@ -12,6 +13,11 @@ class SyntheticFlowDataset(Dataset):
 
     The LR input has six channels: Vx, Vy, Vz, Mx, My, Mz. This follows the
     original paper's stated low-level inputs more closely than velocity only.
+
+    When ``use_kspace_noise`` is True, the low-resolution input is generated
+    using the paper's k-space simulation pipeline (FFT-based downsampling with
+    complex Gaussian noise).  When False, the original trilinear downsample
+    with additive Gaussian noise is used (faster, useful for quick demos).
     """
 
     def __init__(
@@ -21,6 +27,9 @@ class SyntheticFlowDataset(Dataset):
         scale: int = 2,
         noise_std: float = 0.03,
         seed: int = 0,
+        use_kspace_noise: bool = False,
+        snr_range: tuple[float, float] = (14.0, 17.0),
+        venc_range: tuple[float, float] = (1.1, 3.0),
     ) -> None:
         self.samples = samples
         self.hr_size = hr_size
@@ -28,6 +37,9 @@ class SyntheticFlowDataset(Dataset):
         self.lr_size = hr_size // scale
         self.noise_std = noise_std
         self.seed = seed
+        self.use_kspace_noise = use_kspace_noise
+        self.snr_range = snr_range
+        self.venc_range = venc_range
 
     def __len__(self) -> int:
         return self.samples
@@ -38,19 +50,27 @@ class SyntheticFlowDataset(Dataset):
         hr = random_flow_field(self.hr_size)
         torch.random.set_rng_state(generator_state)
 
-        lr = F.interpolate(
-            hr.unsqueeze(0),
-            size=(self.lr_size, self.lr_size, self.lr_size),
-            mode="trilinear",
-            align_corners=False,
-        ).squeeze(0)
+        if self.use_kspace_noise:
+            lr_input, hr = simulate_mri_acquisition(
+                hr,
+                scale=self.scale,
+                snr_range=self.snr_range,
+                venc_range=self.venc_range,
+            )
+        else:
+            lr = F.interpolate(
+                hr.unsqueeze(0),
+                size=(self.lr_size, self.lr_size, self.lr_size),
+                mode="trilinear",
+                align_corners=False,
+            ).squeeze(0)
 
-        if self.noise_std > 0:
-            lr = lr + self.noise_std * torch.randn_like(lr)
+            if self.noise_std > 0:
+                lr = lr + self.noise_std * torch.randn_like(lr)
 
-        lr_velocity = lr.clamp(-1.0, 1.0)
-        lr_magnitude = make_magnitude_channels(lr_velocity)
-        lr_input = torch.cat([lr_velocity, lr_magnitude], dim=0)
+            lr_velocity = lr.clamp(-1.0, 1.0)
+            lr_magnitude = make_magnitude_channels(lr_velocity)
+            lr_input = torch.cat([lr_velocity, lr_magnitude], dim=0)
 
         return lr_input.float(), hr.float()
 
@@ -61,6 +81,7 @@ def upsample_lr(lr: torch.Tensor, size: int) -> torch.Tensor:
 
 
 def make_magnitude_channels(velocity: torch.Tensor) -> torch.Tensor:
+    """Synthetic magnitude channels from velocity (used in spatial-noise mode only)."""
     speed = torch.linalg.vector_norm(velocity, dim=0, keepdim=True).clamp(0.0, 1.0)
     vessel = torch.sigmoid(18.0 * (speed - 0.03))
     mx = vessel

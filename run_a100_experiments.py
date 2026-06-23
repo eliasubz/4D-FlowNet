@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -31,6 +32,8 @@ class Experiment:
     epochs: int
     batch_size: int
     lr: float = 2e-4
+    use_kspace_noise: bool = False
+    upsample_mode: str = "trilinear"
 
 
 def get_experiments(preset: str) -> list[Experiment]:
@@ -58,11 +61,48 @@ def get_experiments(preset: str) -> list[Experiment]:
             Experiment("paperish_vg_noisy", 64, 8, 4, 1e-3, 0.0, 0.08, 4096, 35, 8),
         ]
 
+    if preset == "a100_upgrade":
+        # 2x2 ablation: {spatial/kspace} x {trilinear/subpixel}
+        return [
+            Experiment("baseline_spatial",  32, 4, 2, 1e-3, 0.0, 0.03, 4096, 30, 16,
+                        use_kspace_noise=False, upsample_mode="trilinear"),
+            Experiment("kspace_only",       32, 4, 2, 1e-3, 0.0, 0.03, 4096, 30, 16,
+                        use_kspace_noise=True,  upsample_mode="trilinear"),
+            Experiment("subpixel_only",     32, 4, 2, 1e-3, 0.0, 0.03, 4096, 30, 16,
+                        use_kspace_noise=False, upsample_mode="subpixel"),
+            Experiment("full_paper",        32, 4, 2, 1e-3, 0.0, 0.03, 4096, 30, 16,
+                        use_kspace_noise=True,  upsample_mode="subpixel"),
+        ]
+
+    if preset == "smoke_upgrade":
+        # Quick smoke test for the 2x2 ablation.
+        return [
+            Experiment("baseline_spatial",  16, 2, 1, 1e-3, 0.0, 0.03, 128, 3, 4,
+                        use_kspace_noise=False, upsample_mode="trilinear"),
+            Experiment("kspace_only",       16, 2, 1, 1e-3, 0.0, 0.03, 128, 3, 4,
+                        use_kspace_noise=True,  upsample_mode="trilinear"),
+            Experiment("subpixel_only",     16, 2, 1, 1e-3, 0.0, 0.03, 128, 3, 4,
+                        use_kspace_noise=False, upsample_mode="subpixel"),
+            Experiment("full_paper",        16, 2, 1, 1e-3, 0.0, 0.03, 128, 3, 4,
+                        use_kspace_noise=True,  upsample_mode="subpixel"),
+        ]
+
     raise ValueError(f"unknown preset: {preset}")
 
 
-def make_loader(samples: int, noise_std: float, seed: int, batch_size: int, workers: int, shuffle: bool) -> DataLoader:
-    dataset = SyntheticFlowDataset(samples=samples, noise_std=noise_std, seed=seed)
+def make_loader(
+    samples: int,
+    noise_std: float,
+    seed: int,
+    batch_size: int,
+    workers: int,
+    shuffle: bool,
+    use_kspace_noise: bool = False,
+) -> DataLoader:
+    dataset = SyntheticFlowDataset(
+        samples=samples, noise_std=noise_std, seed=seed,
+        use_kspace_noise=use_kspace_noise,
+    )
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -113,17 +153,25 @@ def train_one(exp: Experiment, args: argparse.Namespace, device: torch.device) -
     out_dir = args.output_dir / exp.name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    train_loader = make_loader(exp.train_samples, exp.train_noise, 10, exp.batch_size, args.workers, True)
-    val_clean = make_loader(args.val_samples, 0.0, 10000, exp.batch_size, args.workers, False)
-    val_matched = make_loader(args.val_samples, exp.train_noise, 20000, exp.batch_size, args.workers, False)
-    val_noisy = make_loader(args.val_samples, 0.10, 30000, exp.batch_size, args.workers, False)
+    train_loader = make_loader(exp.train_samples, exp.train_noise, 10, exp.batch_size, args.workers, True,
+                               use_kspace_noise=exp.use_kspace_noise)
+    val_clean = make_loader(args.val_samples, 0.0, 10000, exp.batch_size, args.workers, False,
+                            use_kspace_noise=exp.use_kspace_noise)
+    val_matched = make_loader(args.val_samples, exp.train_noise, 20000, exp.batch_size, args.workers, False,
+                              use_kspace_noise=exp.use_kspace_noise)
+    val_noisy = make_loader(args.val_samples, 0.10, 30000, exp.batch_size, args.workers, False,
+                            use_kspace_noise=exp.use_kspace_noise)
 
-    model = FourDFlowNet(width=exp.width, lr_blocks=exp.lr_blocks, hr_blocks=exp.hr_blocks).to(device)
+    model = FourDFlowNet(
+        width=exp.width, lr_blocks=exp.lr_blocks, hr_blocks=exp.hr_blocks,
+        upsample_mode=exp.upsample_mode,
+    ).to(device)
     if args.compile and hasattr(torch, "compile"):
         model = torch.compile(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=exp.lr)
-    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
+    scheduler = CosineAnnealingLR(optimizer, T_max=exp.epochs)
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
     params = sum(p.numel() for p in model.parameters())
     history: list[dict[str, float]] = []
     best_score = float("inf")
@@ -141,16 +189,20 @@ def train_one(exp: Experiment, args: argparse.Namespace, device: torch.device) -
             lr = lr.to(device, non_blocking=True)
             hr = hr.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(enabled=device.type == "cuda"):
+            with torch.amp.autocast("cuda", enabled=device.type == "cuda"):
                 pred = model(lr)
                 loss = four_d_flow_loss(pred, hr, gradient_weight=exp.gradient_weight)
                 if exp.divergence_weight:
                     loss = loss + exp.divergence_weight * divergence_l1(pred)
             scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
             running += loss.item()
             pbar.set_postfix(loss=f"{loss.item():.5f}")
+
+        scheduler.step()
 
         row: dict[str, float] = {
             "epoch": float(epoch),
@@ -214,7 +266,11 @@ def write_summary(rows: list[dict[str, float]], output: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run A100-sized 4DFlowNet-mini experiment sweeps.")
-    parser.add_argument("--preset", choices=["smoke", "a100_quick", "a100_main"], default="a100_quick")
+    parser.add_argument(
+        "--preset",
+        choices=["smoke", "smoke_upgrade", "a100_quick", "a100_main", "a100_upgrade"],
+        default="a100_quick",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/experiments"))
     parser.add_argument("--val-samples", type=int, default=384)
     parser.add_argument("--workers", type=int, default=2)
