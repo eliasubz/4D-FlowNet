@@ -1,63 +1,43 @@
 # 4DFlowNet Mini
 
-A small, Colab-friendly recreation of the core 4DFlowNet idea:
+A clean, PyTorch-based reproduction and extension of the core **4DFlowNet** methodology on synthetic blood-flow data:
 
-```text
-high-resolution synthetic blood-flow field
--> low-resolution noisy MRI-like field
--> 3D residual CNN
--> reconstructed high-resolution velocity field
-```
+1. **Synthetic Blood-Flow Field Generation**: Creates 3D analytic velocity profiles representing blood flow.
+2. **K-space MRI Simulation**: Simulates the physical MRI acquisition process (VENC phase encoding, FFT k-space truncation, complex Gaussian noise, and IFFT reconstruction).
+3. **Deep Residual Network**: Super-resolves and denoises 4D flow velocity fields using a ResNet.
+4. **Sub-Pixel Upsampling**: Implements learned 3D sub-pixel convolution (`PixelShuffle3d`) to replace fixed trilinear resizing inside the network.
 
-This is not a full reproduction of the original paper. It recreates the central mechanism with synthetic aorta/pipe-like velocity fields so the experiment can run cheaply.
+---
 
 ## Quick Start
 
+### Installation
 ```bash
 pip install -r requirements.txt
-python train.py --epochs 3 --train-samples 128 --val-samples 32 --batch-size 2
 ```
 
-For Colab, upload this folder or clone your repo, then run the same command. If a GPU is available, the script uses it automatically.
+### Running the Upgraded Training CLI
+Train the network on the physically realistic k-space MRI dataset using learned sub-pixel convolution:
+```bash
+python train.py --epochs 15 --train-samples 1024 --val-samples 128 --batch-size 4 --use-kspace-noise --upsample-mode subpixel
+```
+If a GPU is available, the script automatically enables mixed precision (`torch.amp`) and GPU acceleration.
+
+To run the backward-compatible trilinear upsampling path (the baseline paper design):
+```bash
+python train.py --epochs 15 --train-samples 1024 --val-samples 128 --batch-size 4 --use-kspace-noise --upsample-mode trilinear
+```
+
+---
 
 ## Files
 
-- `src/synthetic_flows.py` creates synthetic 3D velocity fields.
-- `src/dataset.py` turns HR fields into LR noisy inputs and HR targets.
-- `src/model.py` defines a compact 4DFlowNet-style network with anatomical and velocity paths.
-- `src/metrics.py` contains velocity, endpoint, peak, flow-rate, and divergence metrics.
-- `src/losses.py` contains the paper-style MSE plus velocity-gradient loss.
-- `train.py` trains the model and compares it to trilinear interpolation.
-- `4dflownet_colab.ipynb` runs the experiment end-to-end in Colab.
-- `run_a100_experiments.py` runs larger A100 sweeps and writes CSV/JSON summaries.
-- `plot_experiment_summary.py` plots experiment summaries after a sweep.
-
-## Recommended First Experiment
-
-Start with the defaults, then increase:
-
-```bash
-python train.py --epochs 20 --train-samples 1024 --val-samples 128 --batch-size 4
-```
-
-## A100 Experiment Sweep
-
-```bash
-python run_a100_experiments.py --preset a100_quick --workers 2
-```
-
-For a longer run:
-
-```bash
-python run_a100_experiments.py --preset a100_main --workers 2
-```
-
-Results are written to `outputs/experiments/summary.csv`, with per-experiment histories and checkpoints in subfolders.
-
-Plot the sweep:
-
-```bash
-python plot_experiment_summary.py
-```
-
-The original 4DFlowNet paper used CFD-derived aortic flow data from varied aortic geometries. This mini version uses analytic flow fields with randomized rotation, radius, curvature, stenosis-like narrowing, swirl, eccentric jets, and branch-like components.
+- `src/synthetic_flows.py` — Generates synthetic 3D flow velocities with randomized stenosis, swirl, and branch profiles.
+- `src/mri_simulation.py` — Physics-based simulator mapping velocities to complex k-space, applying truncation and noise.
+- `src/dataset.py` — Custom PyTorch dataset integrating the k-space simulation.
+- `src/model.py` — ResNet model with dual velocity/anatomical paths and configurable upsampling modes (`subpixel` vs. `trilinear`).
+- `src/losses.py` — Implements voxel-wise MSE and velocity-gradient losses.
+- `src/metrics.py` — Evaluates MAE, Peak Velocity, and Net Flow Rate errors.
+- `src/visualize.py` — Generates 3D translucent vessel walls and velocity vector quivers using Plotly.
+- `train.py` — Training interface supporting AdamW, Cosine Annealing, and Gradient Clipping.
+- `4dflownet_colab.ipynb` — The primary Google Colab entry point. Runs the **Trilinear (Paper) vs. Sub-Pixel (Upgraded)** ablation sweep and outputs the interactive 3D visualizations.

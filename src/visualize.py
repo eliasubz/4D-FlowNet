@@ -13,15 +13,22 @@ def make_interactive_3d_flow_figure(
     vector_threshold: float = 0.12,
     vector_step: int = 4,
     arrow_scale: float = 0.18,
+    ref_velocity: torch.Tensor | None = None,
 ):
     """Create a Plotly 3D velocity figure with a translucent vessel wall.
 
     Args:
         velocity: Tensor shaped [3, D, H, W].
+        ref_velocity: Optional reference velocity tensor to mask the background.
     """
     import plotly.graph_objects as go
 
     velocity = velocity.detach().cpu()
+    if ref_velocity is not None:
+        # Create a binary fluid domain mask from the reference speed
+        mask = (torch.linalg.vector_norm(ref_velocity.detach().cpu(), dim=0) > 1e-4)
+        velocity = velocity * mask
+        
     spd = speed(velocity)
     d, h, w = spd.shape
 

@@ -75,9 +75,67 @@ class SyntheticFlowDataset(Dataset):
         return lr_input.float(), hr.float()
 
 
-def upsample_lr(lr: torch.Tensor, size: int) -> torch.Tensor:
+def upsample_lr(lr: torch.Tensor, size: int, mode: str = "trilinear") -> torch.Tensor:
+    # Extract velocity channels (first 3 channels)
     velocity = lr[:, :3] if lr.shape[1] > 3 else lr
-    return F.interpolate(velocity, size=(size, size, size), mode="trilinear", align_corners=True)
+    
+    if mode == "trilinear":
+        return F.interpolate(velocity, size=(size, size, size), mode="trilinear", align_corners=True)
+        
+    elif mode == "tricubic":
+        import scipy.ndimage
+        import numpy as np
+        
+        is_batched = (velocity.ndim == 5)
+        if not is_batched:
+            velocity = velocity.unsqueeze(0)
+            
+        b, c, d, h, w = velocity.shape
+        device = velocity.device
+        
+        vel_np = velocity.detach().cpu().numpy()
+        zoomed_batches = []
+        zoom_factors = (size / d, size / h, size / w)
+        
+        for batch_idx in range(b):
+            channels = []
+            for ch_idx in range(c):
+                upsampled = scipy.ndimage.zoom(vel_np[batch_idx, ch_idx], zoom=zoom_factors, order=3)
+                channels.append(upsampled)
+            zoomed_batches.append(np.stack(channels, axis=0))
+            
+        out_np = np.stack(zoomed_batches, axis=0)
+        out_tensor = torch.from_numpy(out_np).to(device)
+        return out_tensor if is_batched else out_tensor.squeeze(0)
+        
+    elif mode == "sinc":
+        is_batched = (velocity.ndim == 5)
+        if not is_batched:
+            velocity = velocity.unsqueeze(0)
+            
+        b, c, d, h, w = velocity.shape
+        device = velocity.device
+        
+        # 3D FFT (centered)
+        fft_val = torch.fft.fftshift(torch.fft.fftn(velocity, dim=(-3, -2, -1)), dim=(-3, -2, -1))
+        
+        # Zero padding
+        padded_fft = torch.zeros((b, c, size, size, size), dtype=fft_val.dtype, device=device)
+        start_d = (size - d) // 2
+        start_h = (size - h) // 2
+        start_w = (size - w) // 2
+        padded_fft[:, :, start_d:start_d+d, start_h:start_h+h, start_w:start_w+w] = fft_val
+        
+        # 3D IFFT
+        padded_fft_unshifted = torch.fft.ifftshift(padded_fft, dim=(-3, -2, -1))
+        hr_reconstructed = torch.fft.ifftn(padded_fft_unshifted, dim=(-3, -2, -1)).real
+        hr_reconstructed = hr_reconstructed * (size**3) / (d * h * w)
+        
+        return hr_reconstructed if is_batched else hr_reconstructed.squeeze(0)
+        
+    else:
+        raise ValueError(f"Unknown upsampling mode: {mode}")
+
 
 
 def make_magnitude_channels(velocity: torch.Tensor) -> torch.Tensor:
