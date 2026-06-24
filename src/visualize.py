@@ -23,9 +23,9 @@ def make_interactive_3d_flow_figure(
     """
     import plotly.graph_objects as go
 
-    velocity = velocity.detach().cpu()
+    velocity = velocity.detach().cpu()[:3]
     if ref_velocity is not None:
-        ref_val = ref_velocity.detach().cpu()
+        ref_val = ref_velocity.detach().cpu()[:3]
         wall_spd = speed(ref_val)
         # Create a binary fluid domain mask from the reference speed
         mask = (wall_spd > 1e-4)

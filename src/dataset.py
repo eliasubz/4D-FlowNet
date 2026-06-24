@@ -141,8 +141,9 @@ def upsample_lr(lr: torch.Tensor, size: int, mode: str = "trilinear") -> torch.T
 def make_magnitude_channels(velocity: torch.Tensor) -> torch.Tensor:
     """Synthetic magnitude channels from velocity (used in spatial-noise mode only)."""
     speed = torch.linalg.vector_norm(velocity, dim=0, keepdim=True).clamp(0.0, 1.0)
-    vessel = torch.sigmoid(18.0 * (speed - 0.03))
+    mask = (speed > 1e-4).float()
+    vessel = torch.sigmoid(18.0 * (speed - 0.03)) * mask
     mx = vessel
-    my = (0.85 * vessel + 0.15 * speed).clamp(0.0, 1.0)
-    mz = (0.65 * vessel + 0.35 * speed).clamp(0.0, 1.0)
+    my = (0.85 * vessel + 0.15 * speed).clamp(0.0, 1.0) * mask
+    mz = (0.65 * vessel + 0.35 * speed).clamp(0.0, 1.0) * mask
     return torch.cat([mx, my, mz], dim=0)
