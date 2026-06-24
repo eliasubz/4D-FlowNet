@@ -53,6 +53,33 @@ class PixelShuffle3d(nn.Module):
         return x.view(b, oc, d * r, h * r, w * r)
 
 
+def init_icnr_3d(conv_layer: nn.Conv3d, scale_factor: int = 2) -> None:
+    """Initialize a pre-PixelShuffle 3D convolution to reduce checkerboards.
+
+    The local PixelShuffle3d stores the r^3 sub-voxel channels contiguously for
+    each output channel, so each base kernel must be repeated r^3 times with
+    repeat_interleave. Copying channels in r^3 large blocks would match a
+    different channel layout and would not initialize our sub-voxels equally.
+    """
+    with torch.no_grad():
+        weight = conv_layer.weight
+        out_c, in_c, d, h, w = weight.shape
+        subpixels = scale_factor ** 3
+        if out_c % subpixels != 0:
+            raise ValueError(
+                f"ICNR requires out_channels divisible by scale_factor^3; "
+                f"got out_channels={out_c}, scale_factor={scale_factor}."
+            )
+
+        base_c = out_c // subpixels
+        sub_kernel = weight.new_empty(base_c, in_c, d, h, w)
+        nn.init.kaiming_normal_(sub_kernel, mode="fan_in", nonlinearity="relu")
+        weight.copy_(sub_kernel.repeat_interleave(subpixels, dim=0))
+
+        if conv_layer.bias is not None:
+            nn.init.zeros_(conv_layer.bias)
+
+
 class FourDFlowNet(nn.Module):
     """4DFlowNet 3D residual network.
 
@@ -68,7 +95,8 @@ class FourDFlowNet(nn.Module):
         width: int = 32,
         lr_blocks: int = 8,
         hr_blocks: int = 4,
-        upsample_mode: str = "subpixel",
+        upsample_mode: str = "trilinear",
+        use_icnr: bool = False,
     ) -> None:
         super().__init__()
         self.upsample_mode = upsample_mode
@@ -90,8 +118,12 @@ class FourDFlowNet(nn.Module):
         if upsample_mode == "subpixel":
             # Learned upsampling: conv to expand channels, then rearrange to spatial.
             # width -> width * 2^3 channels, then PixelShuffle3d(2) -> width channels at 2x resolution.
+            pre_shuffle_conv = SymmetricConv3d(width, width * 8, kernel_size=3)
+    
+            if use_icnr:
+                init_icnr_3d(pre_shuffle_conv.conv, scale_factor=2)
             self.upsample = nn.Sequential(
-                SymmetricConv3d(width, width * 8, kernel_size=3),
+                pre_shuffle_conv,
                 PixelShuffle3d(upscale_factor=2),
                 nn.ReLU(inplace=True),
             )

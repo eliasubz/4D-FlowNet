@@ -65,7 +65,3 @@ When evaluated on the identical physics-based K-Space validation dataset, we can
 
 *Note: Mathematical baselines struggle severely because they cannot unwrap phase aliasing or denoise Rayleigh magnitude distributions, whereas the deep networks excel. Our sub-pixel model reduces the remaining MAE and Endpoint Error by **~36%** over the paper's trilinear architecture while maintaining excellent physical flow properties.*
 
-#### Correct Visualization via Clinical Masking
-In real MRI post-processing, background noise (air and stationary tissue) is masked using a magnitude threshold. Without masking, the background contains random velocity vectors, which makes it look like blood is flowing outside the vessel walls. 
-
-By applying a binary fluid mask derived from the magnitude/ground-truth channel in our 3D visualizer, we can cleanly segment the aorta. This guarantees that all velocity cones remain strictly inside the translucent vessel walls. 
