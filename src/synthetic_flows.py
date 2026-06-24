@@ -68,8 +68,10 @@ def random_flow_field(size: int = 32, device: torch.device | str = "cpu") -> tor
     curvature = torch.empty((), device=device).uniform_(0.0, 0.26)
     phase_x = torch.empty((), device=device).uniform_(-math.pi, math.pi)
     phase_y = torch.empty((), device=device).uniform_(-math.pi, math.pi)
-    center_x = curvature * torch.sin(torch.empty((), device=device).uniform_(0.8, 2.4) * z + phase_x)
-    center_y = curvature * torch.cos(torch.empty((), device=device).uniform_(0.8, 2.4) * z + phase_y)
+    freq_x = torch.empty((), device=device).uniform_(0.8, 2.4)
+    freq_y = torch.empty((), device=device).uniform_(0.8, 2.4)
+    center_x = curvature * torch.sin(freq_x * z + phase_x)
+    center_y = curvature * torch.cos(freq_y * z + phase_y)
     xr = x - center_x
     yr = y - center_y
     r = torch.sqrt(xr.square() + yr.square() + 1e-8)
@@ -97,9 +99,22 @@ def random_flow_field(size: int = 32, device: torch.device | str = "cpu") -> tor
     pulse_phase = torch.empty((), device=device).uniform_(0.0, 2.0 * math.pi)
     pulse = 0.75 + 0.25 * torch.sin(math.pi * (z + 1.0) + pulse_phase)
 
-    vz = (profile + jet) * pulse * vessel
-    vx = (-swirl * yr * profile + branch_strength * branch_gate * torch.sin(branch_angle) * profile) * vessel
-    vy = (swirl * xr * profile + branch_strength * branch_gate * torch.cos(branch_angle) * profile) * vessel
+    # Analytical derivatives of the centerline curve to define flow direction tangent
+    dx_dz = curvature * freq_x * torch.cos(freq_x * z + phase_x)
+    dy_dz = -curvature * freq_y * torch.sin(freq_y * z + phase_y)
+
+    # Normalize the tangent vector to preserve velocity profile magnitude
+    tangent_len = torch.sqrt(1.0 + dx_dz.square() + dy_dz.square())
+    tx = dx_dz / tangent_len
+    ty = dy_dz / tangent_len
+    tz = 1.0 / tangent_len
+
+    # Core axial flow following the curved centerline
+    vz_main = (profile + jet) * pulse
+
+    vz = vz_main * tz * vessel
+    vx = (vz_main * tx - swirl * yr * profile + branch_strength * branch_gate * torch.sin(branch_angle) * profile) * vessel
+    vy = (vz_main * ty + swirl * xr * profile + branch_strength * branch_gate * torch.cos(branch_angle) * profile) * vessel
 
     velocity = torch.stack([vx, vy, vz], dim=0)
     velocity = _rotate_grid_and_vectors(x, y, z, velocity, rotation)

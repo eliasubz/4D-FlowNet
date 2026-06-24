@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
 
     # Training extras.
     parser.add_argument("--max-grad-norm", type=float, default=1.0, help="Gradient clipping max norm.")
+    parser.add_argument("--resume", action="store_true", help="Resume training from the last checkpoint in the output directory.")
+    parser.add_argument("--checkpoint", type=Path, default=None, help="Path to a specific model checkpoint to load.")
     return parser.parse_args()
 
 
@@ -115,13 +117,44 @@ def main() -> None:
     scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
+    checkpoint_last_path = args.output_dir / "4dflownet_last.pt"
+    checkpoint_best_path = args.output_dir / "4dflownet_best.pt"
+
+    start_epoch = 1
+    best_val_mae = float("inf")
+
+    checkpoint_to_load = None
+    if args.checkpoint:
+        checkpoint_to_load = args.checkpoint
+    elif args.resume and checkpoint_last_path.exists():
+        checkpoint_to_load = checkpoint_last_path
+
+    if checkpoint_to_load:
+        print(f"Loading checkpoint from {checkpoint_to_load}...")
+        checkpoint = torch.load(checkpoint_to_load, map_location=device)
+        if "model" in checkpoint:
+            model.load_state_dict(checkpoint["model"])
+        elif "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"])
+
+        if "optimizer_state_dict" in checkpoint and not args.checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint and not args.checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            scheduler.T_max = args.epochs
+        if "epoch" in checkpoint and not args.checkpoint:
+            start_epoch = checkpoint["epoch"] + 1
+        if "best_val_mae" in checkpoint:
+            best_val_mae = checkpoint["best_val_mae"]
+            print(f"Resumed from epoch {start_epoch}. Best Val MAE so far: {best_val_mae:.5f}")
+
     noise_mode = "kspace" if args.use_kspace_noise else "spatial"
     print(
         f"device={device} params={sum(p.numel() for p in model.parameters()):,} "
         f"noise={noise_mode} upsample={args.upsample_mode}"
     )
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         running = 0.0
         progress = tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}", leave=False)
@@ -147,6 +180,25 @@ def main() -> None:
         scheduler.step()
 
         metrics = evaluate(model, val_loader, device)
+        val_mae = metrics["model_mae"]
+        is_best = val_mae < best_val_mae
+        if is_best:
+            best_val_mae = val_mae
+            print(f"New best model found at epoch {epoch}! Val MAE: {best_val_mae:.5f}")
+
+        # Save checkpoints
+        checkpoint_payload = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "best_val_mae": best_val_mae,
+            "metrics": metrics,
+        }
+        torch.save(checkpoint_payload, checkpoint_last_path)
+        if is_best:
+            torch.save(checkpoint_payload, checkpoint_best_path)
+
         print(f"epoch={epoch} train_loss={running / len(train_loader):.5f} lr={scheduler.get_last_lr()[0]:.2e}")
         print(
             "  model:  "
@@ -163,9 +215,15 @@ def main() -> None:
             f"div_l1={metrics['interp_div_l1']:.5f}"
         )
 
+    # Load best checkpoint for final model saving
+    if checkpoint_best_path.exists():
+        print(f"Loading best checkpoint from {checkpoint_best_path} for final model saving...")
+        best_checkpoint = torch.load(checkpoint_best_path, map_location=device)
+        model.load_state_dict(best_checkpoint["model_state_dict"])
+
     checkpoint_path = args.output_dir / "4dflownet.pt"
     torch.save({"model": model.state_dict(), "args": vars(args)}, checkpoint_path)
-    print(f"saved {checkpoint_path}")
+    print(f"saved final model to {checkpoint_path}")
 
 
 if __name__ == "__main__":

@@ -24,8 +24,13 @@ def make_interactive_3d_flow_figure(
     import plotly.graph_objects as go
 
     velocity = velocity.detach().cpu()[:3]
+    # Permute velocity from (3, Z, Y, X) to Cartesian (3, X, Y, Z)
+    velocity = velocity.permute(0, 3, 2, 1)
+
     if ref_velocity is not None:
         ref_val = ref_velocity.detach().cpu()[:3]
+        # Permute ref_val from (3, Z, Y, X) to Cartesian (3, X, Y, Z)
+        ref_val = ref_val.permute(0, 3, 2, 1)
         wall_spd = speed(ref_val)
         # Create a binary fluid domain mask from the reference speed
         mask = (wall_spd > 1e-4)
@@ -34,12 +39,13 @@ def make_interactive_3d_flow_figure(
         wall_spd = speed(velocity)
         
     spd = speed(velocity)
-    d, h, w = spd.shape
+    w, h, d = spd.shape
 
-    axis_z = torch.linspace(-1.0, 1.0, d)
-    axis_y = torch.linspace(-1.0, 1.0, h)
     axis_x = torch.linspace(-1.0, 1.0, w)
-    zz, yy, xx = torch.meshgrid(axis_z, axis_y, axis_x, indexing="ij")
+    axis_y = torch.linspace(-1.0, 1.0, h)
+    axis_z = torch.linspace(-1.0, 1.0, d)
+    # Generate Cartesian meshgrid with indexing="ij"
+    xx, yy, zz = torch.meshgrid(axis_x, axis_y, axis_z, indexing="ij")
 
     sampled = torch.zeros_like(spd, dtype=torch.bool)
     sampled[::vector_step, ::vector_step, ::vector_step] = True
