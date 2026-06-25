@@ -52,11 +52,18 @@ def _rotate_grid_and_vectors(
     return rotated.reshape(3, *x.shape)
 
 
-def random_flow_field(size: int = 32, device: torch.device | str = "cpu") -> torch.Tensor:
+def random_flow_field(
+    size: int = 32,
+    device: torch.device | str = "cpu",
+    return_mask: bool = False,
+    peak_velocity_range: tuple[float, float] = (0.45, 1.60),
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Create a synthetic 3D velocity field with varied geometry.
 
     Returns:
-        Tensor with shape [3, D, H, W] containing vx, vy, vz.
+        Tensor with shape [3, D, H, W] containing vx, vy, vz in m/s. If
+        ``return_mask`` is True, also returns the binary vessel mask with shape
+        [D, H, W].
     """
     x, y, z = make_grid(size, device)
     rotation = _random_rotation(device)
@@ -83,7 +90,8 @@ def random_flow_field(size: int = 32, device: torch.device | str = "cpu") -> tor
     vessel = (r <= radius).float()
 
     vmax = torch.empty((), device=device).uniform_(0.8, 1.6)
-    profile = vmax * torch.clamp(1.0 - (r / radius).square(), min=0.0)
+    area_speedup = (base_radius / radius).square().clamp(max=3.0)
+    profile = vmax * area_speedup * torch.clamp(1.0 - (r / radius).square(), min=0.0)
 
     swirl = torch.empty((), device=device).uniform_(-0.35, 0.35)
     jet_strength = torch.empty((), device=device).uniform_(0.0, 1.0)
@@ -118,5 +126,8 @@ def random_flow_field(size: int = 32, device: torch.device | str = "cpu") -> tor
 
     velocity = torch.stack([vx, vy, vz], dim=0)
     velocity = _rotate_grid_and_vectors(x, y, z, velocity, rotation)
-    velocity = velocity / velocity.abs().amax().clamp_min(1e-6)
+    peak_velocity = torch.empty((), device=device).uniform_(*peak_velocity_range)
+    velocity = velocity / velocity.abs().amax().clamp_min(1e-6) * peak_velocity
+    if return_mask:
+        return velocity, vessel
     return velocity

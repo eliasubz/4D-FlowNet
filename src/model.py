@@ -135,9 +135,9 @@ class FourDFlowNet(nn.Module):
             SymmetricConv3d(width, width, kernel_size=3),
             nn.ReLU(inplace=True),
         )
-        self.vx_head = nn.Sequential(SymmetricConv3d(width, 1, kernel_size=3), nn.Tanh())
-        self.vy_head = nn.Sequential(SymmetricConv3d(width, 1, kernel_size=3), nn.Tanh())
-        self.vz_head = nn.Sequential(SymmetricConv3d(width, 1, kernel_size=3), nn.Tanh())
+        self.vx_head = SymmetricConv3d(width, 1, kernel_size=3)
+        self.vy_head = SymmetricConv3d(width, 1, kernel_size=3)
+        self.vz_head = SymmetricConv3d(width, 1, kernel_size=3)
 
     def forward(self, lr: torch.Tensor) -> torch.Tensor:
         velocity = lr[:, :3]

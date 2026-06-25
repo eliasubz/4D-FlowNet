@@ -30,6 +30,7 @@ class SyntheticFlowDataset(Dataset):
         use_kspace_noise: bool = False,
         snr_range: tuple[float, float] = (14.0, 17.0),
         venc_range: tuple[float, float] = (1.1, 3.0),
+        return_mask: bool = False,
     ) -> None:
         self.samples = samples
         self.hr_size = hr_size
@@ -40,14 +41,19 @@ class SyntheticFlowDataset(Dataset):
         self.use_kspace_noise = use_kspace_noise
         self.snr_range = snr_range
         self.venc_range = venc_range
+        self.return_mask = return_mask
 
     def __len__(self) -> int:
         return self.samples
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         generator_state = torch.random.get_rng_state()
         torch.manual_seed(self.seed + index)
-        hr = random_flow_field(self.hr_size)
+        if self.return_mask:
+            hr, mask = random_flow_field(self.hr_size, return_mask=True)
+        else:
+            hr = random_flow_field(self.hr_size)
+            mask = None
         torch.random.set_rng_state(generator_state)
 
         if self.use_kspace_noise:
@@ -68,10 +74,12 @@ class SyntheticFlowDataset(Dataset):
             if self.noise_std > 0:
                 lr = lr + self.noise_std * torch.randn_like(lr)
 
-            lr_velocity = lr.clamp(-1.0, 1.0)
+            lr_velocity = lr
             lr_magnitude = make_magnitude_channels(lr_velocity)
             lr_input = torch.cat([lr_velocity, lr_magnitude], dim=0)
 
+        if self.return_mask:
+            return lr_input.float(), hr.float(), mask.float()
         return lr_input.float(), hr.float()
 
 

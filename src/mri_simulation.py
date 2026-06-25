@@ -200,10 +200,6 @@ def simulate_mri_acquisition(
     lr_velocity = torch.stack(lr_velocities, dim=0)
     lr_magnitude = torch.stack(lr_magnitudes, dim=0)
 
-    # Normalize velocity to [-1, 1] for network input.
-    vel_max = lr_velocity.abs().amax().clamp_min(1e-6)
-    lr_velocity = lr_velocity / vel_max
-
     # Normalize magnitude to [0, 1].
     mag_max = lr_magnitude.amax().clamp_min(1e-6)
     lr_magnitude = lr_magnitude / mag_max
