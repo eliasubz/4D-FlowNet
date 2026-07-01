@@ -10,7 +10,7 @@ Fun Fact: They used [blender](https://www.blender.org/) to modify the 3D models 
 
 ### Methodolgy
 
-**The Network architecture** is based on a the generator of the super-resolution residual network (ResNet) paper [[2]](https://arxiv.org/abs/1609.04802). The input has one path for the raw noisy velocity maps (16^3) and one that accepts calculated context: Magnitude, Velocities and PC-MRA (=Mag*Speed). Both of them pass through two convolutional maps and are then concatenated, after which they are passed through 8 residual blocks (RB). Each RB consist of two conv layer with a nonlinear layer inbetween and a skip-connection after which another Leaky ReLU is used. After the 8 RB-layers we have 64 sematincally rich feature maps that are upsampled using a simple bilinear resize, after which the features pass through 4 more RBs and three two-layer convolutional heads, for each xyz component,  that redcude the 64 channels back into one channel of size 32^3 now.
+**The Network architecture** is based on a the generator of the super-resolution residual network (ResNet) paper [[2]](https://arxiv.org/abs/1609.04802). The input has one path for the raw noisy velocity maps (16^3) and one that accepts calculated context: Magnitude, Velocities and PC-MRA (=Mag*Speed). Both of them pass through two convolutional maps and are then concatenated, after which they are passed through 8 residual blocks (RB). Each RB consist of two conv layer with a nonlinear layer inbetween and a skip-connection after which another Leaky ReLU is used. After the 8 RB-layers 64 sematincally rich feature maps are upsampled using a simple trilinear resize layer, after which the features pass through 4 more RBs and three two-layer convolutional heads, for each xyz component, that redcude the 64 channels back into one channel of size 32^3.
 
 ![4DFlowNet architecture](assets/4dflownet_architecture.webp)
 
@@ -37,15 +37,15 @@ The visual breakdown above showcases how the 4D FlowNet outperforms simple upsam
 TLDR: The experiments compared trilinear and PixelShuffle upscaling layers with ICNR initialization and found better performance on MAE, flow rate accuracy, etc. while worsening the divergence and introducing checkerboard artifacts.  
 
 
-For the paper recreation, I did not want to learn how CFD simulation works and opted for a simpliefied dataset, although we still preprocessed the patches with the MRI specific Rayleigh noise.
+For the paper recreation, I did not want to learn how CFD simulation works and opted for a simpliefied dataset, that is preprocessed with the MRI specific Rayleigh noise.
 
-**The synthetic dataset** was created using a 3D mask of malformed tube and by heuristically generating velocity vectors inside of it. The border tissue of the blood vessel (mask) with a mid-section narrowing, sampled from the gaussian, is the base of the MRI patches. After picking the general direction of the blood flow, we sample a line close to the center with the peak velocity, while bloodflow close to the edges becomes slower. We introduce swirl effects that tilt some movement vectors, similair to real fluids.
+**The synthetic dataset** was created using a 3D mask of malformed tube and by heuristically generating velocity vectors inside of it. The border tissue of the blood vessel (mask) with a mid-section narrowing, sampled from the gaussian, is the base of the MRI patches. After picking the general direction of the blood flow, main flow close to the center is generated which has the peak velocity, while bloodflow close to the edges becomes slower. Ultimately, swirl effects are introduced that tilt some movement vectors, similair to real fluids.
 
-**The K-Space** is used as described in the paper to introduce MRI specific noies. First we transform the MRI-patch into a complex MRI signal, using fast fourier transform (FFT), whose outer high-frequency is cropped, downsampling the patch from 32³ to 16³. This complex patch is then corruped with a randomized signal-to-noise ratio (SNR) of 14-17 dB, which is exactly what produces the MRI-specific Rayleigh-distributed noise, once the patches are transformed back into the spatial domain.
+**The K-Space** is used as described in the paper to introduce MRI specific noies. First the MRI-patch are transformed into a complex MRI signal, using fast fourier transform (FFT), whose outer high-frequency is cropped, downsampling the patch from 32³ to 16³. This complex patch is then corruped with a randomized signal-to-noise ratio (SNR) of 14-17 dB, which is exactly what produces the MRI-specific Rayleigh-distributed noise, once the patches are transformed back into the spatial domain.
 
 synthetic img
 
-**The experiments** I chose to do were upsampling 3D synthetic MRI patches and comparing different upsampling methods.  picked up the PixelShuffle [[3]](https://arxiv.org/abs/1707.02937) that was mentioned in the *Discussion*.
+**The experiments** I chose to do were comparing different upsampling layers on .  picked up the PixelShuffle [[3]](https://arxiv.org/abs/1707.02937) that was mentioned in the *Discussion*.
 
 The authors mentioned in the *Discussion* they knew that PixelShuffle [[3]](https://arxiv.org/abs/1707.02937) could increase the quality of super-resolution networks. Nonetheless,they still chose a trilinear upscaling layer, because state-of-the-art methods like PixelShuffle introduced checkerboards in their experiments[[1]](put it in). While they had tried to use a nearest-neighbor initialization, I intended to use ICNR (Initializer for Convolution Nearest-Neighbor Resize) initialization and modern deep learning methods to decrease checkerboard artifacts for sub-pixel convolution [[4]](https://arxiv.org/pdf/1707.02937).
 
@@ -55,6 +55,16 @@ In order to test, that I performed a small ablation study comparing the 4D FlowN
 
 ![ablation table](./assets/ablation_table.png)
 
+The recreated table above shows visually all 4D FlowNet implementations beat the Linear method quite clearly, there is a visislbe difference in the velocity error row in between trilinear and PixelShuffle upsampling, where trilinear upsampling performes worse. 
+
+### Conclusion
+
+I present a summary of 4D FlowNet which is upsamples and denoises 4D Flow MRI patches that is exclusively trained on synthetic phase and magnitude images generated from CFD simulations and generalizes on real patient flow MRI scans. In addition, I conducted experiments that demonstrate that using a PixelShuffle instead of a trilinear upsampling layer improves both the MAE, velocity gradient and divergence, while introducing checker board artifacts. These checker board artifacts are partially reduced by ICNR intialization but remain higher than for the baseline of given by the paper. 
+
+
+
+
+
 #### How We Solved It
 We successfully implemented 3D Sub-Pixel Convolution (`PixelShuffle3d`) by introducing three modern deep learning techniques that didn't exist or weren't standard in 2020:
 * **AdamW Weight Decay**: Helps stabilize weights in the expanding upsampling layers.
@@ -62,3 +72,4 @@ We successfully implemented 3D Sub-Pixel Convolution (`PixelShuffle3d`) by intro
 * **Gradient Clipping (`max_norm=1.0`)**: Capping gradients blocks the high-frequency backprop shocks that cause checkerboard artifacts.
 
 Table with all experiment values.
+
